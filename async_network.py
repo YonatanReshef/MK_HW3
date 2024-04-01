@@ -25,7 +25,7 @@ class AsynchronicNeuralNetwork(NeuralNetwork):
         self.comm = MPI.COMM_WORLD
         self.rank = self.comm.Get_rank()
         self.size = self.comm.Get_size()
-		self.num_workers = self.size - self.num_masters
+        self.num_workers = self.size - self.num_masters
 
         self.layers_per_master = self.num_layers // self.num_masters
 
@@ -59,9 +59,19 @@ class AsynchronicNeuralNetwork(NeuralNetwork):
 
                 # send nabla_b, nabla_w to masters 
                 # TODO: add your code
+                for i in range(self.num_masters):
+                    b_to_send = nabla_b[i : self.num_layers : self.num_masters]
+                    w_to_send = nabla_w[i : self.num_layers : self.num_masters]
+
+                    self.comm.Send(b_to_send, i, )
+
 
                 # recieve new self.weight and self.biases values from masters
                 # TODO: add your code
+
+
+
+
 
     def do_master(self, validation_data):
         """
