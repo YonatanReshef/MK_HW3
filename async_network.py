@@ -46,6 +46,10 @@ class AsynchronicNeuralNetwork(NeuralNetwork):
         """
         # setting up the number of batches the worker should do every epoch
         # TODO: add your code
+        workless_batches = self.number_of_batches - (self.number_of_batches // self.num_workers) * self.num_workers
+        self.number_of_batches = self.number_of_batches // self.num_workers
+        if self.rank % self.num_workers < workless_batches:
+            self.number_of_batches += 1
 
         for epoch in range(self.epochs):
             # creating batches for epoch
@@ -59,19 +63,24 @@ class AsynchronicNeuralNetwork(NeuralNetwork):
 
                 # send nabla_b, nabla_w to masters 
                 # TODO: add your code
-                for i in range(self.num_masters):
-                    b_to_send = nabla_b[i : self.num_layers : self.num_masters]
-                    w_to_send = nabla_w[i : self.num_layers : self.num_masters]
+                recv_req = []
+                for layer in range(self.num_layers):
+                    cur_master = layer % self.num_masters
 
-                    self.comm.Send(b_to_send, i, )
+                    b_to_send = nabla_b[layer]
+                    w_to_send = nabla_w[layer]
 
+                    self.comm.Isend(b_to_send, dest=cur_master, tag=layer)
+                    self.comm.Isend(w_to_send, dest=cur_master, tag=layer + self.num_layers)
 
-                # recieve new self.weight and self.biases values from masters
-                # TODO: add your code
+                    # recieve new self.weight and self.biases values from masters
+                    # TODO: add your code
 
+                    recv_req.append(self.comm.Irecv(self.biases[layer], source=cur_master, tag=layer))
+                    recv_req.append(self.comm.Irecv(self.weights[layer], source=cur_master, tag=layer + self.num_layers))
 
-
-
+                for req in recv_req:
+                    req.Wait()
 
     def do_master(self, validation_data):
         """
@@ -85,12 +94,29 @@ class AsynchronicNeuralNetwork(NeuralNetwork):
             nabla_w.append(np.zeros_like(self.weights[i]))
             nabla_b.append(np.zeros_like(self.biases[i]))
 
+        relevant_layers = [layer for layer in range(self.rank, self.num_layers, self.num_masters)]
+
         for epoch in range(self.epochs):
             for batch in range(self.number_of_batches):
 
                 # wait for any worker to finish batch and
                 # get the nabla_w, nabla_b for the master's layers
                 # TODO: add your code
+                stat = MPI.Status()
+
+                layer_num = 0
+                cur_worker = -1
+                for layer in relevant_layers:
+                    if layer_num == 0:
+                        self.comm.Recv(nabla_b[layer_num], source=MPI.ANY_SOURCE, tag=layer, status=stat)
+                        cur_worker = stat.source
+                        self.comm.Recv(nabla_w[layer_num], source=cur_worker, tag=layer + self.num_layers)
+
+                    else:
+                        self.comm.Recv(nabla_b[layer_num], source=cur_worker, tag=layer)
+                        self.comm.Recv(nabla_w[layer_num], source=cur_worker, tag=layer + self.num_layers)
+
+                    layer_num += 1
 
                 # calculate new weights and biases (of layers in charge)
                 for i, dw, db in zip(range(self.rank, self.num_layers, self.num_masters), nabla_w, nabla_b):
@@ -99,8 +125,30 @@ class AsynchronicNeuralNetwork(NeuralNetwork):
 
                 # send new values (of layers in charge)
                 # TODO: add your code
+                send_req = []
+                for layer in relevant_layers:
+                    send_req.append(self.comm.Isend(self.biases[layer], dest=cur_worker, tag=layer))
+                    send_req.append(self.comm.Isend(self.weights[layer], dest=cur_worker, tag=layer + self.num_layers))
+
+                for req in send_req:
+                    req.Wait()
 
             self.print_progress(validation_data, epoch)
 
         # gather relevant weight and biases to process 0
         # TODO: add your code
+        if self.rank == 0:
+            for layer in range(self.num_layers):
+                cur_master = layer % self.num_masters
+                if cur_master != 0:
+                    self.comm.Recv(self.biases[layer], source=cur_master, tag=layer)
+                    self.comm.Recv(self.weights[layer], source=cur_master, tag=layer + self.num_layers)
+
+        else:
+            send_req = []
+            for layer in relevant_layers:
+                send_req.append(self.comm.Isend(self.biases[layer], 0, tag=layer))
+                send_req.append(self.comm.Isend(self.weights[layer], 0, tag=layer + self.num_layers))
+
+            for req in send_req:
+                req.Wait()

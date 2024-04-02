@@ -91,3 +91,4 @@ if sys.argv[1] == "async":
 
     accuracy = nn.validate(test_data) / 100.0
     print("Test Accuracy: " + str(accuracy) + "%")
+
